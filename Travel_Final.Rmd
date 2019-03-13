@@ -1,0 +1,123 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r}
+library(readr)
+library(dplyr)
+library(randomForest)
+library(ggplot2)
+library(Hmisc)
+library(party)
+library(MLmetrics)
+library(xgboost)
+library(readr)
+library(stringr)
+library(caret)
+library(devtools)
+library(mlr)
+library(parallel)
+library(parallelMap)
+
+data_train=read.csv("uconn_comp_2018_train.csv",colClasses = c("numeric","numeric" ,"factor" , "factor" , "numeric" ,"numeric" , "factor" , "factor" , "factor" , "factor" , "factor" , "factor" , "numeric" ,"factor","factor" ,"numeric","numeric","factor","numeric","factor","numeric","factor") )
+glimpse(data_train)
+data_test=read.csv("uconn_comp_2018_test.csv",colClasses = c("numeric","numeric" ,"factor" , "factor" , "numeric" ,"numeric" , "factor" , "factor" , "factor" , "factor" , "factor" , "factor" , "numeric" ,"factor","factor" ,"numeric","numeric","factor","numeric","factor","numeric","factor"))
+
+lf=ceiling(nrow(data_train)*0.70)
+data_train$fraud=factor(data_train$fraud)
+train <- data_train[1:lf, ]
+test <- data_train[lf:nrow(data_train), ]
+length(train)
+
+naRows <- apply(train[ c(2:19,22) ], 1, function(x) any(is.na(x)))
+dtrain= train[!naRows,]
+
+naRows <- apply(test[ c(2:19,22) ], 1, function(x) any(is.na(x)))
+dtest=test[!naRows,]
+
+naRows <- apply(data_test[ c(2:19,22) ], 1, function(x) any(is.na(x)))
+ftest=data_test[!naRows,]
+data_test[naRows,]
+```
+
+```{r}
+set.seed(1001)
+vars=c("gender","marital_status","high_education_ind","address_change_ind","living_status","accident_site","past_num_of_claims","witness_present_ind","channel","policy_report_filed_ind","age_of_vehicle","vehicle_category","vehicle_color")
+Dummydata=normalizeFeatures(dtrain[,-which(names(dtrain) %in% c("claim_number","channel","vehicle_price","vehicle_weight","age_of_driver","vehicle_category" , "vehicle_color","policy_report_filed_ind"))],method = "standardize")
+TestDummydata=normalizeFeatures(dtest[,-which(names(dtest) %in% c("claim_number","channel","vehicle_price","vehicle_weight","age_of_driver","vehicle_category" , "vehicle_color","policy_report_filed_ind"))],method = "standardize")
+fTestDummydata=normalizeFeatures(dtest[,-which(names(dtest) %in% c("claim_number","channel","vehicle_price","vehicle_weight","age_of_driver","vehicle_category" , "vehicle_color","policy_report_filed_ind"))],method = "standardize")
+Traindummies <- vtreat::designTreatmentsZ(Dummydata, vars, 
+                                   minFraction= 0,
+                                   verbose=FALSE)
+Testdummies <- vtreat::designTreatmentsZ(TestDummydata, vars, 
+                                   minFraction= 0,
+                                   verbose=FALSE)
+fTestdummies <- vtreat::designTreatmentsZ(fTestDummydata, vars, 
+                                   minFraction= 0,
+                                   verbose=FALSE)
+
+lrn <- makeLearner("classif.xgboost",predict.type = "prob")
+lrn$par.vals <- list( objective="binary:logistic", eval_metric="error")
+params <- makeParamSet( makeDiscreteParam("booster",values = c("gbtree")), makeIntegerParam("max_depth",lower = 1L,upper = 20L),makeIntegerParam("nrounds",lower=300,upper=600),makeNumericParam("lambda",lower=0.3,upper=0.60),makeNumericParam("gamma",lower=0,upper=10),makeNumericParam("eta", lower = 0, upper = 1),                        makeNumericParam("min_child_weight",lower = 1L,upper = 10L), makeNumericParam("subsample",lower = 0.3,upper = 1),makeNumericParam("max_delta_step",lower = 1,upper = 10), makeNumericParam("colsample_bytree",lower = 0.2,upper = 1))
+
+rdesc <- makeResampleDesc("CV",stratify = T,iters=5L)
+ctrl <- makeTuneControlRandom(maxit = 100L)
+
+##trainTask1 <- normalizeFeatures(trainTask1,method = "standardize")
+
+Traindummy=as.data.frame(cbind(vtreat::prepare(Traindummies,dtrain),dtrain$fraud,dtrain$safty_rating,dtrain$annual_income,dtrain$liab_prct,dtrain$claim_est_payout))
+length(Traindummy)
+names(Traindummy)[30]="claim_est_payout"
+names(Traindummy)[29]="liab_prct"
+names(Traindummy)[28]="annual_income"
+names(Traindummy)[27]="safty_rating"
+names(Traindummy)[26]="fraud"
+
+Testdummy=as.data.frame(cbind(vtreat::prepare(Testdummies,dtest),dtest$fraud,dtest$safty_rating,dtest$annual_income,dtest$liab_prct,dtest$claim_est_payout))
+
+names(Testdummy)[30]="claim_est_payout"
+names(Testdummy)[29]="liab_prct"
+names(Testdummy)[28]="annual_income"
+names(Testdummy)[27]="safty_rating"
+names(Testdummy)[26]="fraud"
+View(Testdummy)
+
+fTestdummy=as.data.frame(cbind(vtreat::prepare(fTestdummies,ftest),ftest$fraud,ftest$safty_rating,ftest$annual_income,ftest$liab_prct,ftest$claim_est_payout))
+
+names(fTestdummy)[30]="claim_est_payout"
+names(fTestdummy)[29]="liab_prct"
+names(fTestdummy)[28]="annual_income"
+names(fTestdummy)[27]="safty_rating"
+names(fTestdummy)[26]="fraud"
+
+
+trainTask <- makeClassifTask(data=Traindummy[3:30] ,target = "fraud")
+
+testTask <- makeClassifTask(data=Testdummy[3:30] ,target = "fraud")
+ftestTask <- makeClassifTask(data=fTestdummy[3:30] ,target = "fraud")
+parallelStartSocket(cpus = detectCores())
+
+##makeSMOTEWrapper(lrn, sw.rate = 1, sw.nn = 5L,sw.standardize = TRUE, sw.alt.logic = FALSE)
+
+mytune <- tuneParams(learner = lrn, task = trainTask, resampling = rdesc, measures = acc, par.set = params, control = ctrl, show.info = T)
+mytune
+
+lrn_tune <- setHyperPars(lrn,par.vals = param)
+lrn_tune
+xgmodel <- train(learner = lrn_tune,task = trainTask)
+xgmodel
+
+xgpred <- predict(xgmodel,testTask,type="prob")
+confusionMatrix(xgpred[["data"]][["response"]],xgpred[["data"]][["truth"]])
+
+ftest$predict=xgpred[["data"]][["prob.1"]]
+ write.csv(ftest,"df.csv")
+
+library("pROC")
+auc(as.numeric(xgpred$data$response),as.numeric(xgpred$data$truth))
+
+```
+
+
+
+

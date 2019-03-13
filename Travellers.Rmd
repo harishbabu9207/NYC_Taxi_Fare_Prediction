@@ -1,0 +1,409 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+setwd("C:/Users/Harish/CatBoostRepository/catboost/catboost/R-package")
+getwd()
+devtools::build()
+devtools::install()
+```{r}
+library(readr)
+setwd("C:/Users/Harish/CatBoostRepository/catboost/catboost/R-package")
+library(dplyr)
+library(randomForest)
+library(ggplot2)
+library(Hmisc)
+library(party)
+library(MLmetrics)
+library(xgboost)
+library(readr)
+library(stringr)
+library(caret)
+library(devtools)
+devtools::build()
+devtools::install()
+library(catboost)
+options(devtools.install.args = "--no-multiarch")
+install_git("https://github.com/Microsoft/LightGBM", subdir = "R-package")
+git clone 
+cd LightGBM
+Rscript build_r.R
+devtools::install_github('catboost/catboost', subdir = 'catboost/R-package')
+install.packages("C:\Users\Harish\Desktop\catboost-R-Windows-0.10.4\catboost", repos = NULL, type="source")
+cd LightGBM
+git clone
+setwd("C:/Users/Harish/CatBoostRepository/catboost/catboost/R-package")
+devtools::build()
+devtools::install_url('https://github.com/catboost/catboost/releases/download/v0.10.4/catboost-R-Windows-0.10.4.tgz')
+devtools::install_github('catboost/catboost', subdir = 'catboost/R-package')
+
+```
+
+```{r}
+getwd()
+
+data_train=read.csv("uconn_comp_2018_train.csv",colClasses = c("numeric","numeric" ,"factor" , "factor" , "numeric" ,"numeric" , "factor" , "factor" , "factor" , "factor" , "factor" , "factor" , "numeric" ,"factor","factor" ,"numeric","numeric","factor","numeric","factor","numeric","factor") )
+data_test=read.csv("uconn_comp_2018_test.csv",colClasses = c("numeric","numeric" ,"factor" , "factor" , "numeric" ,"numeric" , "factor" , "factor" , "factor" , "factor" , "factor" , "factor" , "numeric" ,"factor","factor" ,"numeric","numeric","factor","numeric","factor","numeric","factor"))
+set.seed(1234)
+```
+
+```{r}
+#apply(data_train, 2, function(x) sum(is.na(x)))
+# Set random seed for reproducibility
+set.seed(42)
+#data_train$fraud <- as.numeric(data_train$fraud)
+# Transform "Class" to factor to perform classification and rename levels to predict class probabilities (need to be valid R variable names)
+#data_train$fraud <- as.numeric(data_train$fraud)
+#data$Class <- revalue(data$Class, c("0"="false", "1"="true"))
+#data_train$Class <- factor(data_train$fraud)
+# Create training and testing set with stratification (i.e. preserving the proportions of false/true values from the "Class" column)
+#train_index <- createDataPartition(data_train$fraud, times = 1, p = 0.7, list = F)
+#X_train <- data_train[train_index]
+#X_test <- data_train[[!(train_index)]]
+#y_train <- data_train$fraud[train_index]
+#y_test <- data_train$fraud[-train_index]
+# Parallel processing for faster training
+#registerDoMC(cores = 8)
+# Use 10-fold cross-validation
+ctrl <- trainControl(method = "cv",
+                     number = 10,
+                     verboseIter = T,
+                     classProbs = T,
+                     sampling = "smote",
+                     summaryFunction = twoClassSummary,
+                     savePredictions = T)
+
+levels(data_train$fraud) <- c("first_class", "second_class")
+final=data_train[ c(2,3,4,5,6,7:12,16,17,22) ]
+View(final)
+model_rf_smote <- caret::train(fraud ~ ., data = final, method = "rf", trControl = ctrl, verbose = T, metric = "ROC",na.action=na.exclude)
+
+chg.rf <- randomForest(fraud ~ .,data=final,mtry=2, method = "rf", trControl = ctrl, verbose = T, metric = "ROC",na.action=na.exclude)
+chg.rf
+model_rf_smote
+
+plot(varImp(model_rf_smote))
+
+##test data
+naRows <- apply(data_test[ c(2,3,4,5,6,7:12,16,17,22) ], 1, function(x) any(is.na(x)))
+sum(!(naRows))
+dtest= data_test[!naRows,]
+dtest_narows= data_test[naRows,]
+dtest_narows
+preds <- predict(model_rf_smote, dtest, type = "prob")
+View(preds)
+dtest$first_class=preds[,1]
+dtest$second_class=preds[,2]
+dtest
+
+write.csv(dtest, "test_filename2.csv")
+
+```
+
+
+
+```{r}
+best_param = list()
+best_seednumber = 1234
+best_logloss = Inf
+best_logloss_index = 0
+dtrain_X <- xgb.DMatrix(data = data.matrix(train[ c(2:21) ]), label = as.numeric(train$fraud)-1)
+dtest_X <- xgb.DMatrix(data = data.matrix(test[ c(2:21)  ]), label =as.numeric(test$fraud)-1)
+ftest_X <- xgb.DMatrix(data = data.matrix(data_test[ c(2:21) ]), label =as.numeric(data_test$fraud)-1)
+
+for (iter in 1:100) {
+    param <- list(objective = "binary:logistic",
+          eval_metric = "errror",
+          max_depth = 14,
+          eta =0.01,
+          gamma = 0.561, 
+          subsample = 0.961,
+          colsample_bytree = 0.606, 
+          min_child_weight = 2.04,
+          max_delta_step = sample(1:10, 1)
+          )
+    cv.nround = 522
+    cv.nfold = 5
+    seed.number = sample.int(10000, 1)[[1]]
+    set.seed(seed.number)
+    mdcv <- xgb.cv(data=dtrain_X, params = param, nthread=6, 
+                    nfold=cv.nfold, nrounds=522,
+                    verbose = T, early_stopping_rounds=8)
+
+    min_logloss = min(mdcv[, test.mlogloss.mean])
+    min_logloss_index = which.min(mdcv[, test.mlogloss.mean])
+
+    if (min_logloss < best_logloss) {
+        best_logloss = min_logloss
+        best_logloss_index = min_logloss_index
+        best_seednumber = seed.number
+        best_param = param
+    }
+}
+mdcv
+nround = best_logloss_index
+set.seed(seed.number)
+train_smote <- SMOTE(fraud ~ ., as.data.frame(data_train), perc.over = 20000, perc.under=100)
+
+xgb <- xgboost(data = dtrain_X,nrounds = 522, gamma = 0.561, eta=0.01,max_depth = 14, objective = "binary:logistic", min_child_weight=2.98, subsample=0.753, colsample_bytree=0.488)
+md <- xgb.train(data=dtrain_X, nrounds = 522, gamma = 0.561, eta=0.01,max_depth = 14, objective = "binary:logistic", min_child_weight=2.98, subsample=0.753, colsample_bytree=0.488)
+preds_xgb <- predict(md, dtest_X,type="prob")
+View(preds_xgb)
+length(as.numeric(preds_xgb > 0.5))
+table(as.numeric(preds_xgb > 0.5), test$fraud)
+
+data_test$second_class=preds_xgb
+dtest
+
+write.csv(data_test, "test_filename1.csv")
+
+
+lrn <- makeLearner("classif.xgboost",predict.type = "response")
+lrn$par.vals <- list( objective="binary:logistic", eval_metric="error", nrounds=100L, eta=0.1)
+params <- makeParamSet( makeDiscreteParam("booster",values = c("gbtree")), makeIntegerParam("max_depth",lower = 3L,upper = 10L), makeNumericParam("min_child_weight",lower = 1L,upper = 10L), makeNumericParam("subsample",lower = 0.5,upper = 1), makeNumericParam("colsample_bytree",lower = 0.5,upper = 1))
+rdesc <- makeResampleDesc("CV",stratify = T,iters=5L)
+ctrl <- makeTuneControlRandom(maxit = 10L)
+library(parallel)
+library(parallelMap)
+library(onehot)
+re=data.frame(onehot(train[c(2:22)]))
+re
+class(train$gender)
+test$living_status=as.numeric(test$living_status)
+test$past_num_of_claims=as.numeric(test$past_num_of_claims)
+train$witness_present_ind=as.numeric(train$witness_present_ind)
+train$gender=as.character(train$fraud)
+parallelStartSocket(cpus = detectCores())
+traintask <- makeClassifTask (data = re,target = "fraud")
+traintask
+testtask1 <- makeClassifTask (data = test[c(2:22)],target = "fraud")
+ftesttask <- makeClassifTask (data = data_test[c(2:22)],target = "fraud")
+mytune <- tuneParams(learner = lrn, task = traintask, resampling = rdesc, measures = acc, par.set = params, control = ctrl, show.info = T)
+mytune
+lrn_tune <- setHyperPars(lrn,par.vals = mytune$x)
+xgmodel <- train(learner = lrn_tune,task = traintask)
+xgmodel
+xgpred <- predict(xgmodel,testtask)
+View(xgpred)
+confusionMatrix(xgpred$data$response,xgpred$data$truth)
+par.vals
+xgpred$data$response
+parallelStop()
+ls(list=testtask)
+
+xgb.plot.tree(model = xgb, trees = 0, show_node_id = TRUE)
+xgb.importance(colnames(dtest_X), model = xgb)
+
+
+
+
+```
+
+
+
+```{r}
+lf=ceiling(nrow(data_train)*0.70)
+data_train$fraud=factor(data_train$fraud)
+train <- data_train[1:lf, ]
+test <- data_train[lf:nrow(data_train), ]
+length(train)
+```
+```{r}
+train %>%
+  select(fraud) %>%
+  group_by(fraud) %>%
+  summarise(count = n()) %>%
+  glimpse
+table(train$fraud)
+```
+
+
+```{r}
+library(caret)
+naRows <- apply(data_train, 1, function(x) any(is.na(x)))
+naRows_test <- apply(data_test, 1, function(x) any(is.na(x)))
+sum(!(naRows))
+sum(!(naRows_test))
+data2.noNAs <- train[!naRows,]
+data3.noNAs <- data_test[!naRows_test,]
+chg.rf <- randomForest(fraud ~ .,data=data2.noNAs,  importance=TRUE,keep.forest=TRUE)
+chg.rf
+
+
+# Random Search
+TrainData <- data2.noNAs[,1:21]
+TrainClasses <- data2.noNAs[,22]
+naRows <- apply(TrainData, 1, function(x) any(is.na(x)))
+control <- trainControl(method="repeatedcv", number=10, repeats=3)
+seed <- 7
+metric <- "Accuracy"
+set.seed(seed)
+mtry <- sqrt(ncol(TrainData))
+tunegrid <- expand.grid(.mtry=mtry)
+rf_default <- caret::train(TrainData, TrainClasses, method="rf", metric=metric, tuneGrid=tunegrid,trControl=control,na.action=na.omit)
+print(rf_default)
+
+bestmtry <- tuneRF(TrainData, TrainClasses, stepFactor=1.5, improve=1e-5, ntree=500,na.action=na.omit)
+print(bestmtry)
+
+data(iris)
+TrainData <- iris[,1:4]
+TrainClasses <- iris[,5]
+knnFit1 <- train(!(TrainData), TrainClasses,method = "knn",
+preProcess = c("center", "scale"),
+tuneLength = 10,
+trControl = trainControl(method = "cv"))
+
+
+test$predicted <- predict(chg.rf , test,type="prob")
+test
+data_test$predicted <- predict(chg.rf , data_test,type="prob")
+table(test$predicted)
+table(data_test$predicted)
+
+options(repr.plot.width=5, repr.plot.height=4)
+varImpPlot(chg.rf,sort=T)
+data_test
+test
+write.csv(data_test, "filename.csv")
+```
+
+```{r}
+dtrain_X <- xgb.DMatrix(data = data.matrix(data_train[ c(2,3,4,5,6,7:12,16,17) ]), label = as.numeric(data_train$fraud)-1)
+dtest_X <- xgb.DMatrix(data = data.matrix(data_test[ c(2,3,4,5,6,7:12,16,17) ]), label =as.numeric(data_test$fraud)-1)
+xgb <- xgboost(data = dtrain_X, nrounds = 100, gamma = 0.1, max_depth = 25, objective = "binary:logistic", nthread = 7)
+as.numeric(data_train$fraud)
+table(data_train$fraud)
+View(dtrain_X)
+dtrain_X[age_of_driver,14]
+print(dtrain_X[age_of_driver], verbose=TRUE)
+preds_xgb <- predict(xgb, dtest_X,type="prob")
+table(preds_xgb)
+View(preds_xgb)
+predicted=c(as.numeric(preds_xgb > 0.5))
+length(preds_xgb[preds_xgb < 0.5])
+length(predicted)
+View(sdsd)
+sdsd=data.frame(predicted,data_train$fraud)
+table(predicted, data_train$fraud)
+confusionMatrix(sdsd)
+data_test$predict=preds_xgb
+```
+
+
+
+
+```{r}
+sdsd=read_csv("uconn_comp_2018_train.csv")
+labels = sdsd['labels']
+label=label(sdsd)
+xgb <- xgboost(data = data.matrix(data2.noNAs[,-1]), 
+  label = seq(1:13),
+ eta = 0.1,
+ max_depth = 15, 
+ nround=25, 
+ subsample = 0.5,
+ colsample_bytree = 0.5,
+ seed = 1,
+ eval_metric = "merror",
+ objective = "multi:softprob",
+ num_class = 12,
+ nthread = 3
+)
+labelss=c("age_of_driver","marital_status","accident_site","past_num_of_claims","witness_present_ind")
+diseaseLabels <- data_train %>%
+    select(fraud) %>% # get the column with the # of humans affected
+    is.na() %>% # is it NA?
+    magrittr::not()
+dtrain <- xgb.DMatrix(data=data.matrix(data2.noNAs[ c(2,4,7:12,17,22) ]),label=as.numeric(data2.noNAs$fraud)-1
+)
+head(dtrain)
+params <-  list(booster = "gbtree", objective = "binary:hinge", eta=0.3, gamma=0, max_depth=6, min_child_weight=1, subsample=1, colsample_bytree=1)
+xgbcv <- xgb.cv( params = params, data = dtrain, nrounds = 100, nfold = 5, showsd = T, stratified = T, print.every.n = 10, early.stop.round = 20)
+bstSparse <- xgboost(params = params,data =dtrain,nthread = 2, nrounds = 2, verbose = 2)
+model <- xgboost(data = dtrain, # the data   
+                  eta = 0.1,
+ max_depth = 8, 
+ nround=10, 
+ subsample = 0.5,
+ colsample_bytree = 0.5,
+ seed = 2,
+ eval_metric = "merror",
+ objective = "binary:logistic",
+num_class=2,
+ nthread = 3, nfold = 5, showsd = T, stratified = T, print.every.n = 10, early.stop.round = 20,)  
+model
+data.matrix(data2.noNAs)
+sdsd=data3.noNAs[ c(2,4,7:12,17,22) ]
+dtest=xgb.DMatrix(data=data.matrix(sdsd),label=diseaseLabels[1:nrow(sdsd)])
+dtest
+cbind(dtest,predict(model,dtest))
+dtesr=predict(bstSparse,dtest)
+View(dtrain)
+table(dtesr)
+xgb.DMatrix.save(dtest, 'xgb.DMatrix.data.csv')
+labels <- train$target 
+##XGBOOSt
+ new_tr <- model.matrix(~.+0,data = train[,-c("fraud")]) 
+params <- list(booster = "gbtree", objective = "multi:softprob", eta=0.3, gamma=0, max_depth=6, min_child_weight=1, subsample=1, colsample_bytree=1)
+xgbcv <- xgb.cv( params = params, data = dtrain, nrounds = 100, nfold = 5, showsd = T, stratified = T, print.every.n = 10, early.stop.round = 20, maximize = F)
+```
+
+
+```{r}
+svm_model=svm(fraud~.,data=train[c(2,3,4,5,6,7:12,16,17,22)],type='C-classification')
+#Summary will list the respective parameters uch as cost, gamma, etc.
+summary(svm_model)
+#Predicting the data with the input to be the dataset itself, we can calculate the accuracy with a confusion matrix
+pred=predict(svm_model,test,type="prob")
+View(pred)
+pred
+table(pred>0.5)
+
+
+library("caret")
+library("e1071")
+ctrl <- trainControl(method = "cv",
+                     number = 10,
+                     verboseIter = T,
+                     classProbs = T,
+                     sampling = "smote",
+                     summaryFunction = twoClassSummary,
+                     savePredictions = T)
+
+levels(data_train$fraud) <- c("first_class", "second_class")
+final=data_train[ c(2,3,4,5,6,7:12,16,17,22) ]
+View(final)
+model_rf_smote <- caret::train(fraud ~ ., data = train, method = "svmLinear", trControl = ctrl, preProcess = c("center", "scale"),
+                 tuneLength=10,na.action=na.omit,metric="ROC",type='C-classification',kernel="radial", cost=10, gamma=0.5)
+model_rf_smote
+
+SD=getModelInfo(model = "svmLinearWeights2", regex = FALSE)[[1]]
+SD
+#The accuracy turns out to be 82.42%
+#Now let's tune the SVM parameters to get a better accuracy on the training dataset
+svm_tune <- tune(model_rf_smote, train.x=as.numeric(train), train.y=train$fraud, 
+            kernel="radial", ranges=list(cost=10^(-1:2), gamma=c(.5,1,2)))
+print(svm_tune)
+#Gives an optimal cost to be 10 and a gamma value of 0.5
+naRows <- apply(train, 1, function(x) any(is.na(x)))
+naRows_test <- apply(data_test, 1, function(x) any(is.na(x)))
+sum(!(naRows))
+sum(!(naRows_test))
+data_test[naRows,]
+data2.noNAs <- data_test[!naRows,]
+data3.noNAs <- data_test[!naRows_test,]
+svm_model_after_tune <- svm(fraud ~ ., data=train, type='C-classification',kernel="radial"
+                            , cost=10, gamma=0.5)
+svm_model_after_tune
+summary(svm_model_after_tune)
+#The results show us that there is an improved accuracy of about 98%, results are obtained in the form of a confusion matrix
+data_test
+pred <- predict(model_rf_smote,data2.noNAs,type="prob")
+View(data2.noNAs)
+data2.noNAs$predict=pred$second_class
+write.csv(data2.noNAs,"file1.csv")
+system.time(predict(svm_model_after_tune,diabetes))
+table(pred,diabetes$Outcome)
+```
+
